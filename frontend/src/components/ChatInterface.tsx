@@ -64,6 +64,33 @@ export function ChatInterface() {
               }
               return prev;
             });
+          } else if (chunk.type === 'tool_call') {
+            setMessages((prev) => {
+              const lastMessage = prev[prev.length - 1];
+              if (lastMessage && lastMessage.role === 'assistant') {
+                return [
+                  ...prev.slice(0, -1),
+                  { ...lastMessage, content: lastMessage.content + `\n\n🛠️ Calling tool: ${chunk.tool_name}...\n` },
+                ];
+              }
+              return prev;
+            });
+          } else if (chunk.type === 'tool_result') {
+            setMessages((prev) => {
+              const lastMessage = prev[prev.length - 1];
+              if (lastMessage && lastMessage.role === 'assistant') {
+                return [
+                  ...prev.slice(0, -1),
+                  { ...lastMessage, content: lastMessage.content + `\n📝 Tool Result (${chunk.tool_name}):\n${chunk.content}\n\n` },
+                ];
+              }
+              return prev;
+            });
+          // TODO: do i need to add part start and part ends to this????
+          } else if (chunk.type === 'part_start') {
+            console.log('Part Start:', chunk);
+          } else if (chunk.type === 'part_end') {
+            console.log('Part End:', chunk);
           } else if (chunk.type === 'event') {
             console.log('received event:', chunk.event);
           } else if (chunk.type === 'final') {
@@ -160,7 +187,7 @@ export function ChatInterface() {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-hidden">
-        <div className="h-full max-w-4xl mx-auto w-full">
+        <div className="h-full max-w-4xl mx-auto w-full flex flex-col">
           <MessageList messages={messages} />
         </div>
       </div>

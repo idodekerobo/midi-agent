@@ -195,11 +195,31 @@ async def chat(
             print(f'\nagent event: {type(event).__name__}')
             print(f'{event}\n\n')
 
+            event_type = type(event).__name__
+
             if isinstance(event, AgentRunResultEvent):
                 yield f"data: {json.dumps({'type': 'final', 'content': event.result.output, 'new_history': []})}\n\n"
-            elif type(event).__name__ == "PartDeltaEvent":
+            
+            elif event_type == "PartDeltaEvent":
                 if hasattr(event, 'delta') and hasattr(event.delta, 'content'):
                     yield f"data: {json.dumps({'type': 'delta', 'content': event.delta.content})}\n\n"
+            
+            elif event_type == "FunctionToolCallEvent":
+                yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.part.tool_name, 'args': event.part.args})}\n\n"
+
+            elif event_type == "FunctionToolResultEvent":
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event.result.tool_name, 'content': str(event.result.content)})}\n\n"
+
+            elif event_type == "PartStartEvent":
+                content = getattr(event.part, 'content', None)
+                tool_name = getattr(event.part, 'tool_name', None)
+                yield f"data: {json.dumps({'type': 'part_start', 'content': content, 'tool_name': tool_name})}\n\n"
+
+            elif event_type == "PartEndEvent":
+                content = getattr(event.part, 'content', None)
+                tool_name = getattr(event.part, 'tool_name', None)
+                yield f"data: {json.dumps({'type': 'part_end', 'content': content, 'tool_name': tool_name})}\n\n"
+
             else:
                 yield f"data: {json.dumps({'type': 'event', 'event': str(event)})}\n\n"
 
