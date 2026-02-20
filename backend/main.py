@@ -7,10 +7,12 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Any
-from pydantic_ai import Agent, RunContext, ToolCallPart, AgentRunResultEvent
+from pydantic_ai import Agent, RunContext, ToolCallPart, AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent, PartStartEvent, PartEndEvent, PartDeltaEvent
 from pydantic_ai.messages import ModelMessage, UserPromptPart, BinaryContent
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -27,9 +29,11 @@ AGENT_WORKSPACE_DIR = Path(__file__).parent / "agent_workspace"
 AGENT_WORKSPACE_DIR.mkdir(exist_ok=True)
 SKILLS_DIR = Path(__file__).parent / "skills"
 
-api_key = os.getenv("GOOGLE_API_KEY")
-provider = GoogleProvider(api_key=api_key)
-model = GoogleModel('gemini-3-pro-preview', provider=provider)
+gemini_api_key = os.getenv("GOOGLE_API_KEY")
+gemini_provider = GoogleProvider(api_key=gemini_api_key)
+gemini_3_model = GoogleModel('gemini-3-pro-preview', provider=gemini_provider)
+# anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+# sonnet_model = AnthropicModel('claude-sonnet-4-5', provider=AnthropicProvider(api_key=anthropic_api_key))
 
 def get_skills_summary() -> str:
     summary = ["<available_skills>"]
@@ -47,7 +51,7 @@ def get_skills_summary() -> str:
     return "\n".join(summary)
 
 system_prompt = "\n".join([
-    "You are a helpful assistant that can listen to music files and create a MIDI file for the song transcribed to piano.",
+    "You are a helpful assistant that can analyze music files and create a MIDI file for the song transcribed to piano.",
     "You will receive a music file from a user.",
     "Your job is to create a 2 minute MIDI that represents the entire song in a MIDI file using Piano.",
     "You are able to write code to accomplish that and should use the file system and write code, using the given tools to do so.",
@@ -55,15 +59,33 @@ system_prompt = "\n".join([
     f"Your working directory to create files, scripts, and other things to run is {AGENT_WORKSPACE_DIR}. You can only read/write files in that directory.",
     "You have the following tools: read_file, write_file, edit_file, execute_command. execute_command lets you execute a shell command and return the file output.",
     "",
-    "Here is your process for creating midi from a music file:",
-    "1. The song will be uploaded to the agent automatically so you don't need to do anything. Listen to the song using audio understanding. You do not need to install any extra packages or dependencies. Just use your multimodal LLM audio understanding.",
-    "2. Identify the main melodies/chords of the song and timestamps. Tell the user what the notes of main melodies and chords are and the timestamps they map too.",
-    "3. Use the write_file tool to write a script that makes a midi (.mid) file. Use the execute_command tool to run the script. The midi you make will represent the song based on your understanding of the song. The mido package is already imported and you don't need to install anything else.",
+    "Here is your process for creating MIDI (and notation) from a music file:",
+    "1. The song will be uploaded automatically as uploaded_audio.mp3. Do not handle upload logic.",
+    "2. Create analysis.json (measured features) using a Python script with librosa:",
+    "   - Extract tempo (BPM), beat times, onset times, pitch contour (pyin -> MIDI float), and loudness (RMS).",
+    "3. Create score.json (monophonic melody) based on analysis.json + the audio:",
+    "   - Output must be valid JSON only (no prose/markdown).",
+    "   - Melody must be monophonic (no overlapping notes).",
+    "   - Use ticks_per_beat=480, time_signature=4/4 unless strong evidence otherwise, quantize to a 1/16 grid.",
+    "4. Deterministically render score.musicxml from score.json using code (no LLM for rendering):",
+    "   - Divisions must equal ticks_per_beat (480).",
+    "   - Fill gaps with rests so each measure sums correctly.",
+    "5. Deterministically render output.mid from score.json using mido (piano):",
+    "   - Set tempo + time signature meta messages.",
+    "   - Set instrument with program_change program=0 (Acoustic Grand Piano) on channel 0.",
+    "6. Execute your scripts using execute_command and confirm that analysis.json, score.json, score.musicxml, and output.mid were created.",
+    "7. Briefly summarize detected tempo and a short preview of the melody (first few notes) for the user.",
+    "",
+    "IMPORTANT:",
+    "- Use librosa for numerical timing/pitch measurements; do not rely on pure audio guessing for tempo/onsets/pitch.",
+    "- Do not install packages; librosa and mido are already installed.",
+    "",
     "Here are the following skills you have. When you need to use that skill, use the 'read_file' tool on the location provided to get the full skill definition.",
     get_skills_summary(),
 ])
 
-agent = Agent(model, system_prompt=system_prompt)
+agent = Agent(gemini_3_model, system_prompt=system_prompt)
+# agent = Agent(sonnet_model, system_prompt=system_prompt)
 
 import subprocess
 
@@ -104,6 +126,8 @@ def validate_path(relative_path: str, allowed_dirs: List[Path]) -> Path:
             raise e
         raise ValueError(f"Invalid path: {relative_path}")
 
+# TODO: why do i need the process tool? how does it make the agent better? 
+# TODO: re-write these to only use the working directory and sub-paths under the cwd
 @agent.tool
 async def read_file(ctx: RunContext[None], path: str) -> str:
     """Read the contents of a file at the given path."""
